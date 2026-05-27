@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>隨機漫步計算機</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f9fafb;
+            margin: 0;
+            padding: 10px 20px;
+            user-select: none;
+            height: 100vh;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        h2 { margin: 0 0 10px 0; font-size: 18px; color: #111; }
+        
+        .main-container {
+            display: flex;
+            flex: 1;
+            gap: 20px;
+            min-height: 0;
+        }
+
+        .side-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            width: 320px;
+            flex-shrink: 0;
+        }
+
+        .controls, .result-box {
+            background: white;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 13px;
+            margin-bottom: 12px;
+        }
+        .control-group:last-child { margin-bottom: 0; }
+        .control-group label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+        
+        input[type="number"] {
+            padding: 4px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            width: 60px;
+        }
+
+        .board-wrapper {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #e5e7eb;
+            border-radius: 6px;
+            padding: 10px;
+            min-height: 0;
+        }
+
+        #board-container {
+            height: 100%;
+            aspect-ratio: 1 / 1;
+            background-color: #d1d5db;
+            padding: 2px;
+        }
+        
+        #board {
+            display: grid;
+            width: 100%;
+            height: 100%;
+            gap: 1px;
+        }
+        
+        .cell { background-color: #fff; box-sizing: border-box; }
+        .cell.start { background-color: #10b981; cursor: grab; }
+        .cell.end { background-color: #ef4444; cursor: grab; }
+        .cell.wp { background-color: #3b82f6; cursor: grab; }
+        .dragging { cursor: grabbing !important; }
+
+        .result-box div { font-size: 13px; color: #444; margin-bottom: 4px; }
+        .result-box .val-large { font-size: 20px; font-weight: bold; color: #2563eb; margin-bottom: 10px; }
+        .result-box .val-green { color: #10b981; }
+        hr { border: 0; border-top: 1px solid #eee; margin: 10px 0; }
+    </style>
+</head>
+<body>
+
+    <h2>隨機漫步計算機</h2>
+
+    <div class="main-container">
+        <div class="side-panel">
+            <div class="controls">
+                <div class="control-group">
+                    <strong>參數設定</strong>
+                    <label>棋盤大小: <input type="number" id="board-size" value="8" min="2" max="100" onchange="handleSizeChange()"></label>
+                    <label>最大步數: <input type="number" id="steps" value="30" min="0" max="5000" onchange="calculateProbability()"></label>
+                </div>
+                <div class="control-group">
+                    <strong>移動規則</strong>
+                    <label><input type="radio" name="rule" value="normal" checked onchange="calculateProbability()"> 可回頭</label>
+                    <label><input type="radio" name="rule" value="no-backtrack" onchange="calculateProbability()"> 不可回頭</label>
+                    <label style="margin-top:5px;"><input type="checkbox" id="use-wp" onchange="toggleWaypoint()"> 必須經過藍點</label>
+                </div>
+                <div style="font-size: 12px; color: #666; margin-top: 10px;">提示: 拖曳色塊可改變位置</div>
+            </div>
+
+            <div class="result-box">
+                <div>最短直線距離</div>
+                <div class="val-large" style="color: #444;" id="display-distance">0 步</div>
+                <hr>
+                <div>抵達終點機率</div>
+                <div class="val-large" id="result-prob">0.00%</div>
+                <hr>
+                <div>成功路線平均步數 (期望值)</div>
+                <div class="val-large val-green" id="result-expected">- 步</div>
+            </div>
+        </div>
+
+        <div class="board-wrapper">
+            <div id="board-container">
+                <div id="board"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let size = 8;
+        let startPos = {r: 7, c: 0}; 
+        let endPos = {r: 0, c: 7};
+        let wpPos = {r: 4, c: 3}; 
+        
+        const boardEl = document.getElementById('board');
+        const dr = [-1, 0, 1, 0];
+        const dc = [0, 1, 0, -1];
+        let draggingType = null; 
+
+        boardEl.addEventListener('mousedown', function(e) {
+            const cell = e.target;
+            if (!cell.classList.contains('cell')) return;
+            if (cell.classList.contains('start')) draggingType = 'start';
+            else if (cell.classList.contains('end')) draggingType = 'end';
+            else if (cell.classList.contains('wp') && document.getElementById('use-wp').checked) draggingType = 'wp';
+            if (draggingType) { document.body.classList.add('dragging'); e.preventDefault(); }
+        });
+
+        boardEl.addEventListener('mouseover', function(e) {
+            if (!draggingType) return;
+            const cell = e.target;
+            if (!cell.classList.contains('cell')) return;
+
+            const r = parseInt(cell.dataset.r);
+            const c = parseInt(cell.dataset.c);
+            const useWp = document.getElementById('use-wp').checked;
+
+            if (draggingType !== 'start' && r === startPos.r && c === startPos.c) return;
+            if (draggingType !== 'end' && r === endPos.r && c === endPos.c) return;
+            if (useWp && draggingType !== 'wp' && r === wpPos.r && c === wpPos.c) return;
+
+            if (draggingType === 'start') startPos = {r, c};
+            else if (draggingType === 'end') endPos = {r, c};
+            else if (draggingType === 'wp') wpPos = {r, c};
+
+            updateBoardVisuals();
+            calculateProbability(); 
+        });
+
+        window.addEventListener('mouseup', function() {
+            if (draggingType) { draggingType = null; document.body.classList.remove('dragging'); }
+        });
+
+        function toggleWaypoint() {
+            updateBoardVisuals();
+            calculateProbability();
+        }
+
+        function handleSizeChange() {
+            let inputSize = parseInt(document.getElementById('board-size').value);
+            if (isNaN(inputSize) || inputSize < 2) return;
+            if (inputSize > 100) { inputSize = 100; document.getElementById('board-size').value = 100; }
+            size = inputSize;
+            
+            if (startPos.r >= size || startPos.c >= size) startPos = {r: size - 1, c: 0};
+            if (endPos.r >= size || endPos.c >= size) endPos = {r: 0, c: size - 1};   
+            if (wpPos.r >= size || wpPos.c >= size) wpPos = {r: Math.floor(size/2), c: Math.floor(size/2)};
+            if (startPos.r === endPos.r && startPos.c === endPos.c) endPos.c = Math.max(0, endPos.c - 1);
+            
+            createBoard();
+            calculateProbability();
+        }
+
+        function createBoard() {
+            boardEl.innerHTML = '';
+            boardEl.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+            boardEl.style.gridTemplateRows = `repeat(${size}, 1fr)`;
+            
+            const fragment = document.createDocumentFragment();
+            for (let r = 0; r < size; r++) {
+                for (let c = 0; c < size; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.r = r;
+                    cell.dataset.c = c;
+                    fragment.appendChild(cell);
+                }
+            }
+            boardEl.appendChild(fragment);
+            updateBoardVisuals();
+        }
+
+        function updateBoardVisuals() {
+            document.querySelectorAll('.cell').forEach(c => c.classList.remove('start', 'end', 'wp'));
+            if (document.getElementById('use-wp').checked) {
+                const wpCell = document.querySelector(`.cell[data-r="${wpPos.r}"][data-c="${wpPos.c}"]`);
+                if (wpCell) wpCell.classList.add('wp');
+            }
+            const startCell = document.querySelector(`.cell[data-r="${startPos.r}"][data-c="${startPos.c}"]`);
+            if (startCell) startCell.classList.add('start');
+            const endCell = document.querySelector(`.cell[data-r="${endPos.r}"][data-c="${endPos.c}"]`);
+            if (endCell) endCell.classList.add('end');
+        }
+
+        function updateDistance(useWp) {
+            let distance = 0;
+            if (useWp) {
+                distance = Math.abs(startPos.r - wpPos.r) + Math.abs(startPos.c - wpPos.c) + Math.abs(wpPos.r - endPos.r) + Math.abs(wpPos.c - endPos.c);
+            } else {
+                distance = Math.abs(startPos.r - endPos.r) + Math.abs(startPos.c - endPos.c);
+            }
+            document.getElementById('display-distance').innerText = distance + ' 步';
+            return distance;
+        }
+
+        function calculateProbability() {
+            let steps = parseInt(document.getElementById('steps').value);
+            if (isNaN(steps) || steps < 0) steps = 0;
+            if (steps > 5000) steps = 5000;
+
+            const rule = document.querySelector('input[name="rule"]:checked').value;
+            const useWp = document.getElementById('use-wp').checked;
+            
+            let finalProb = 0;
+            let expectedStepsSum = 0; 
+            let prevSuccessProb = 0;  
+
+            const minDistance = updateDistance(useWp);
+            
+            if (steps < minDistance) {
+                document.getElementById('result-prob').innerText = '0.00%';
+                document.getElementById('result-expected').innerText = '- 步';
+                return;
+            }
+
+            const startV = useWp ? 0 : 1;
+            const endIdxBase = (endPos.r * size + endPos.c);
+            const wpIdxBase = (wpPos.r * size + wpPos.c);
+
+            if (rule === 'normal') {
+                const bufferSize = size * size * 2;
+                let currentProb = new Float64Array(bufferSize);
+                let nextProb = new Float64Array(bufferSize);
+                
+                currentProb[(startPos.r * size + startPos.c) * 2 + startV] = 1.0;
+                prevSuccessProb = currentProb[endIdxBase * 2 + 1];
+
+                for (let step = 0; step < steps; step++) {
+                    let minR = Math.max(0, startPos.r - step - 1);
+                    let maxR = Math.min(size - 1, startPos.r + step + 1);
+                    let minC = Math.max(0, startPos.c - step - 1);
+                    let maxC = Math.min(size - 1, startPos.c + step + 1);
+                    
+                    if(useWp) { minR = 0; maxR = size - 1; minC = 0; maxC = size - 1; }
+
+                    for (let r = minR; r <= maxR; r++) {
+                        for (let c = minC; c <= maxC; c++) {
+                            if (r === endPos.r && c === endPos.c) {
+                                nextProb[endIdxBase * 2 + 0] += currentProb[endIdxBase * 2 + 0];
+                                nextProb[endIdxBase * 2 + 1] += currentProb[endIdxBase * 2 + 1];
+                                continue;
+                            }
+
+                            const baseIdx = (r * size + c) * 2;
+                            for (let v = 0; v < 2; v++) {
+                                let p = currentProb[baseIdx + v];
+                                if (p > 0) {
+                                    let validMoves = [];
+                                    for (let i = 0; i < 4; i++) {
+                                        let nr = r + dr[i], nc = c + dc[i];
+                                        if (nr >= 0 && nr < size && nc >= 0 && nc < size) validMoves.push(i);
+                                    }
+                                    let splitProb = p / validMoves.length;
+                                    for (let i = 0; i < validMoves.length; i++) {
+                                        let nr = r + dr[validMoves[i]], nc = c + dc[validMoves[i]];
+                                        let isWp = (useWp && nr === wpPos.r && nc === wpPos.c) ? 1 : 0;
+                                        nextProb[(nr * size + nc) * 2 + (v | isWp)] += splitProb;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    let temp = currentProb;
+                    currentProb = nextProb;
+                    nextProb = temp;
+                    nextProb.fill(0); 
+
+                    let currentSuccessProb = currentProb[endIdxBase * 2 + 1];
+                    expectedStepsSum += (step + 1) * (currentSuccessProb - prevSuccessProb);
+                    prevSuccessProb = currentSuccessProb;
+                }
+                finalProb = currentProb[endIdxBase * 2 + 1];
+
+            } else {
+                const bufferSize = size * size * 8;
+                let currentProb = new Float64Array(bufferSize);
+                let nextProb = new Float64Array(bufferSize);
+
+                if (startPos.r === endPos.r && startPos.c === endPos.c && startV === 1) {
+                    prevSuccessProb = 1.0;
+                    finalProb = 1.0;
+                }
+
+                if (steps > 0) {
+                    let validFirstMoves = [];
+                    for (let i = 0; i < 4; i++) {
+                        let nr = startPos.r + dr[i], nc = startPos.c + dc[i];
+                        if (nr >= 0 && nr < size && nc >= 0 && nc < size) validFirstMoves.push(i);
+                    }
+                    if (validFirstMoves.length > 0) {
+                        let splitP = 1.0 / validFirstMoves.length;
+                        for (let i = 0; i < validFirstMoves.length; i++) {
+                            let dir = validFirstMoves[i];
+                            let nr = startPos.r + dr[dir], nc = startPos.c + dc[dir];
+                            let isWp = (useWp && nr === wpPos.r && nc === wpPos.c) ? 1 : 0;
+                            currentProb[((nr * size + nc) * 4 + dir) * 2 + (startV | isWp)] += splitP;
+                        }
+                    }
+
+                    let step1SuccessProb = 0;
+                    for(let d=0; d<4; d++) step1SuccessProb += currentProb[(endIdxBase * 4 + d) * 2 + 1];
+                    expectedStepsSum += 1 * (step1SuccessProb - prevSuccessProb);
+                    prevSuccessProb = step1SuccessProb;
+
+                    for (let step = 1; step < steps; step++) {
+                        for (let r = 0; r < size; r++) {
+                            for (let c = 0; c < size; c++) {
+                                const cellBaseIdx = (r * size + c) * 8;
+                                
+                                if (r === endPos.r && c === endPos.c) {
+                                    for(let d=0; d<4; d++) {
+                                        nextProb[cellBaseIdx + d * 2 + 0] += currentProb[cellBaseIdx + d * 2 + 0];
+                                        nextProb[cellBaseIdx + d * 2 + 1] += currentProb[cellBaseIdx + d * 2 + 1];
+                                    }
+                                    continue;
+                                }
+
+                                for (let in_dir = 0; in_dir < 4; in_dir++) {
+                                    for (let v = 0; v < 2; v++) {
+                                        let p = currentProb[cellBaseIdx + in_dir * 2 + v];
+                                        if (p > 0) {
+                                            let validNextMoves = [];
+                                            for (let out_dir = 0; out_dir < 4; out_dir++) {
+                                                if (out_dir === (in_dir + 2) % 4) continue; 
+                                                let nr = r + dr[out_dir], nc = c + dc[out_dir];
+                                                if (nr >= 0 && nr < size && nc >= 0 && nc < size) validNextMoves.push(out_dir);
+                                            }
+                                            if (validNextMoves.length > 0) {
+                                                let splitP = p / validNextMoves.length;
+                                                for (let k = 0; k < validNextMoves.length; k++) {
+                                                    let out_dir = validNextMoves[k];
+                                                    let nr = r + dr[out_dir], nc = c + dc[out_dir];
+                                                    let isWp = (useWp && nr === wpPos.r && nc === wpPos.c) ? 1 : 0;
+                                                    nextProb[((nr * size + nc) * 4 + out_dir) * 2 + (v | isWp)] += splitP;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        let temp = currentProb;
+                        currentProb = nextProb;
+                        nextProb = temp;
+                        nextProb.fill(0);
+
+                        let currentSuccessProb = 0;
+                        for(let d=0; d<4; d++) currentSuccessProb += currentProb[(endIdxBase * 4 + d) * 2 + 1];
+                        expectedStepsSum += (step + 1) * (currentSuccessProb - prevSuccessProb);
+                        prevSuccessProb = currentSuccessProb;
+                    }
+                    finalProb = prevSuccessProb;
+                }
+            }
+
+            document.getElementById('result-prob').innerText = (finalProb * 100).toFixed(6) + '%';
+            if (finalProb > 0) {
+                document.getElementById('result-expected').innerText = (expectedStepsSum / finalProb).toFixed(2) + ' 步';
+            } else {
+                document.getElementById('result-expected').innerText = '- 步';
+            }
+        }
+
+        createBoard();
+        calculateProbability();
+    </script>
+</body>
+</html>
