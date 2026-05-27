@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>隨機漫步計算機</title>
     <style>
         body {
@@ -11,6 +11,7 @@
             margin: 0;
             padding: 10px 20px;
             user-select: none;
+            -webkit-user-select: none;
             height: 100vh;
             box-sizing: border-box;
             display: flex;
@@ -74,6 +75,7 @@
             aspect-ratio: 1 / 1;
             background-color: #d1d5db;
             padding: 2px;
+            touch-action: none;
         }
         
         #board {
@@ -84,15 +86,43 @@
         }
         
         .cell { background-color: #fff; box-sizing: border-box; }
-        .cell.start { background-color: #10b981; cursor: grab; }
-        .cell.end { background-color: #ef4444; cursor: grab; }
-        .cell.wp { background-color: #3b82f6; cursor: grab; }
+        .cell.start { background-color: #10b981; }
+        .cell.end { background-color: #ef4444; }
+        .cell.wp { background-color: #3b82f6; }
         .dragging { cursor: grabbing !important; }
 
         .result-box div { font-size: 13px; color: #444; margin-bottom: 4px; }
         .result-box .val-large { font-size: 20px; font-weight: bold; color: #2563eb; margin-bottom: 10px; }
         .result-box .val-green { color: #10b981; }
         hr { border: 0; border-top: 1px solid #eee; margin: 10px 0; }
+
+        /* ====== 手機版優化 (RWD) ====== */
+        @media (max-width: 768px) {
+            body {
+                height: auto;
+                overflow-y: auto;
+                padding: 10px;
+            }
+            .main-container {
+                flex-direction: column;
+            }
+            .side-panel {
+                width: 100%;
+            }
+            .board-wrapper {
+                width: 100%;
+                padding: 5px;
+                box-sizing: border-box;
+                align-items: flex-start;
+            }
+            #board-container {
+                width: 100%;
+                height: auto;
+            }
+            input[type="number"] {
+                font-size: 16px; /* 防止 iOS 點擊輸入框時畫面自動放大 */
+            }
+        }
     </style>
 </head>
 <body>
@@ -113,7 +143,7 @@
                     <label><input type="radio" name="rule" value="no-backtrack" onchange="calculateProbability()"> 不可回頭</label>
                     <label style="margin-top:5px;"><input type="checkbox" id="use-wp" onchange="toggleWaypoint()"> 必須經過藍點</label>
                 </div>
-                <div style="font-size: 12px; color: #666; margin-top: 10px;">提示: 拖曳色塊可改變位置</div>
+                <div style="font-size: 12px; color: #666; margin-top: 10px;">提示: 電腦用滑鼠、手機用手指拖曳色塊即可改變位置</div>
             </div>
 
             <div class="result-box">
@@ -146,19 +176,38 @@
         const dc = [0, 1, 0, -1];
         let draggingType = null; 
 
-        boardEl.addEventListener('mousedown', function(e) {
-            const cell = e.target;
-            if (!cell.classList.contains('cell')) return;
+        // ====== 電腦版滑鼠事件 ======
+        boardEl.addEventListener('mousedown', function(e) { handleDragStart(e.target); });
+        boardEl.addEventListener('mouseover', function(e) { handleDragMove(e.target); });
+        window.addEventListener('mouseup', handleDragEnd);
+
+        // ====== 手機版觸控事件 ======
+        boardEl.addEventListener('touchstart', function(e) {
+            handleDragStart(e.target);
+            if (draggingType) e.preventDefault(); // 防止拖曳時網頁跟著滑動
+        }, { passive: false });
+
+        boardEl.addEventListener('touchmove', function(e) {
+            if (!draggingType) return;
+            e.preventDefault(); 
+            const touch = e.touches[0];
+            const cell = document.elementFromPoint(touch.clientX, touch.clientY);
+            handleDragMove(cell);
+        }, { passive: false });
+
+        window.addEventListener('touchend', handleDragEnd);
+
+        // ====== 拖曳邏輯共用函數 ======
+        function handleDragStart(cell) {
+            if (!cell || !cell.classList.contains('cell')) return;
             if (cell.classList.contains('start')) draggingType = 'start';
             else if (cell.classList.contains('end')) draggingType = 'end';
             else if (cell.classList.contains('wp') && document.getElementById('use-wp').checked) draggingType = 'wp';
-            if (draggingType) { document.body.classList.add('dragging'); e.preventDefault(); }
-        });
+            if (draggingType) document.body.classList.add('dragging');
+        }
 
-        boardEl.addEventListener('mouseover', function(e) {
-            if (!draggingType) return;
-            const cell = e.target;
-            if (!cell.classList.contains('cell')) return;
+        function handleDragMove(cell) {
+            if (!draggingType || !cell || !cell.classList.contains('cell')) return;
 
             const r = parseInt(cell.dataset.r);
             const c = parseInt(cell.dataset.c);
@@ -174,11 +223,11 @@
 
             updateBoardVisuals();
             calculateProbability(); 
-        });
+        }
 
-        window.addEventListener('mouseup', function() {
+        function handleDragEnd() {
             if (draggingType) { draggingType = null; document.body.classList.remove('dragging'); }
-        });
+        }
 
         function toggleWaypoint() {
             updateBoardVisuals();
